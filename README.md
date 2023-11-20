@@ -3,4 +3,5 @@ Online supplement for Practice Paper: Using Reddit Data to Refine Vaccine Messag
 Repo contains: 
 - Quarto notebook (.qmd)
 - Quarto html output (.html)
+- Web scraping and other R and Python scripts (code/*)
 - Raw and processed data (data/*)
