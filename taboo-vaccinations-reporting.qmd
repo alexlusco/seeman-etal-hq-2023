@@ -1,0 +1,556 @@
+---
+title: "Taboo Vaccinations Reporting"
+institute: "Skunkworks Institute"
+author: "Jamie Duncan & Alex Luscombe"
+date: "September 8, 2022"
+format: 
+  html:
+    code-tools: true
+    code-fold: true
+    self-contained: true
+    self-contained-math: true
+editor: visual
+---
+
+```{r, message=FALSE, include=FALSE}
+# read in dependencies
+pacman::p_load(readr, ggplot2, tidyr, stringr, dplyr, forcats, tidytext, ggwordcloud, rmarkdown)
+```
+
+# Research problem and questions
+
+Canada engaged in a largely successful vaccination campaign against COVID-19. Messaging about COVID-19 vaccines often emphasized that vaccines are the best way to protect one's self and others from severe illness. It was frequently repeated that COVID-19 vaccines are scientifically proven to be effective and safe. But not everyone that got vaccinated did so for reasons that were in line with popular public health narratives.
+
+In this study we ask: What unorthodox or 'taboo' motivators did Canadian residents have for getting vaccinated? How prevalent are these unorthodox reasons?
+
+# Methodology
+
+We used a computational-qualitative approach to collecting and analyzing data. 
+
+## Data collection
+
+Using Reddit as a case study, we:
+
+1.  Generated a list of Canadian subreddits by scraping [this list on Reddit](https://www.reddit.com/r/ListOfSubreddits/comments/m2x58n/all_canada_subreddits/). This page pointed to 266 Canadian subreddits (`code/01_subreddit-names.R`). Examples include r/Canada and r/Guelph. This is not an exhaustive list.
+
+    ```{r, message=FALSE}
+    subreddits <- read_csv("data/raw/subreddits.csv")
+
+    paged_table(subreddits)
+    ```
+
+2.  Generated a string dictionary containing phrasing that people commonly use to express the reason they (or someone close to them, e.g., child, parent, friend) got vaccinated (`code/02_string-dictionary.R`). Examples include "got vaccinated because", "got vaccinated since", "got boosted so", and "reason for being vaccinated". In total there were 79 strings in our dictionary. Our creation of these strings was informed by preliminary reviews of Reddit content.
+
+    ```{r, message=FALSE}
+    search_terms <- read_csv("data/raw/query_terms.csv")
+
+    paged_table(search_terms)
+    ```
+
+3.  Using the PushShift.io API to search Reddit comments, we scraped every comment from each subreddit that matched one of the strings in our dictionary. In total, we obtained 1127 comments using this web scraping method. This data is saved as `data/raw/master_df.csv`.
+
+4.  Solved encoding issues and removed unnecessary characters. Labelled the subreddits by type as well as region to support exploratory analysis. For example, r/Guelph is annotated `city` & `ON`, r/Canada is `national` & `Can`, and r/mcgill is `university` & `QC`. This data was saved in `data/processed/ reddit_clean.csv`.
+
+5.  Filtered out duplicates and irrelevant comments. To determine which comments were relevant to the analysis, we manually went through each one and determined whether or not it was relevant to the analysis. Only comments that: (a) expressed a reason for getting vaccinated (or 'boosted') and (b) referred to a discrete person or set of people in their immediate network (e.g., family members, friends, coworkers) were retained for the final analysis. Expressions of reasons attributed to vague or abstract groups (e.g., "all Canadians got vaccinated because") were excluded from the analysis, unless the commenter implicated themselves in that group (e.g., "we all got vaccinated because").
+
+The final sample consisted of 411 posts from 49 subreddits. The fully annotated dataset is saved as `data/processed/reddit_annotated_final`.
+
+## Data Analysis
+
+We qualitatively coded each of the 411 comments in three iterations. Our coding methodology was deliberative. We coded together in real time and discussed cases that were ambiguous. In the first round we sorted the comments into high-level categories. These categories were refined and altered in the second round. In the final round we verified that each code fit. This consensus based approach is preferable to using tests like inter-coder reliability because it is more time efficient and produces higher-fidelity results with a data set of this size. **Note that codes are non-exclusive meaning that one comment could be coded in multiple categories.**
+
+To supplement our qualitative analysis, we calculated tf-idf, or 'term frequency-inverse document frequency', scores for each word in each code. Tf-idf in this context serves as a measure for how 'relevant' a word is to given category. A word that appears a lot in a given category (the 'term frequency' part of tf-idf) but less so outside of that category (the 'inverse document frequency' part of tf-idf) can be said to have higher importance for that category than other words. The mathematical formula for the metric is:
+
+$$
+tfidf(t,d,D)=tf(t,d)×idf(t,D)
+$$
+
+Where $t$ is the terms, $d$ is each document (in this application, categories), and $D$ is the total collection of documents. $tf(t, d)$ is calculated by splitting up or 'tokenizing' a collection of texts at the word level and counting the number of words that appear in each document. $idf(t, D)$ is calculated by taking the log of the total number of documents and dividing this by the total number of documents containing a given word:
+
+$$
+idf( t, D ) = log \frac{ \text{| } D \text{ |} }{ 1 + \text{| } \{ d \in D : t \in d \} \text{ |} }
+$$
+
+Multiplying $tf$ and $idf$ generates a word's tf-idf score. The larger the tf-idf score, the more important the word is to a given document.
+
+We calculated tf-idf scores for every word in each of the high-level categories and plotted the top 20 words (i.e., those with the highest tf-idf scores) as a word cloud. The results of the tf-idf word clouds enhance confidence that content accurately reflects the assigned codes. For example, content that was coded as `travel` should feature words related to travel in the top most relevant words.
+
+# 2: Data Exploration
+
+```{r, message=FALSE}
+# read in data
+reddit_posts <- read_csv("data/processed/reddit_annotated_v1.csv") %>% mutate(body = str_squish(body)) # adding squish for formatting consistency, since matching on 'body'
+
+# to obtain missing metadata, remerge with original df
+reddit_metadata <- read_csv("data/processed/reddit_clean.csv") %>% mutate(body = str_squish(body)) # adding squish for formatting consistency, since matching on 'body'
+
+reddit_posts <- reddit_posts %>%
+  left_join(reddit_metadata, by = "body")
+
+# adjust feature order for readability
+reddit_posts <- reddit_posts %>%
+  select(doc_id, author, datetime, body, subreddit, subreddit_type, subreddit_region, wc, final_code, notes) %>%
+  # rename final code to 'theme'
+  rename("theme" = "final_code")
+```
+
+```{r, message=FALSE}
+# reformat dates to only include year/month/day
+reddit_posts <- reddit_posts %>%
+  mutate(datetime = as.Date(datetime))
+```
+
+```{r, message=FALSE}
+# recode theme labels into higher level / meaningful codes for analysis/presentation of findings
+reddit_posts_recoded <- reddit_posts %>%
+  mutate(theme = case_when(
+    theme == "ex" ~ "expert advice",
+    theme == "ff" ~ "friends & family",
+    theme == "jb" ~ "just because",
+    theme == "n" ~ "return to normalcy",
+    theme == "o" ~ "other",
+    theme == "phm" ~ "protection of self, others, and/or belief in science",
+    theme == "reg" ~ "mandates (recreation)",
+    theme == "sa" ~ "social acquiescence",
+    theme == "sex" ~ "mandates (recreation)",
+    theme == "spo" ~ "mandates (recreation)",
+    theme == "tr" ~ "mandates (travel)",
+    theme == "w" ~ "mandates (work/school)",
+    theme == "party" ~ "mandates (recreation)",
+    TRUE ~ theme
+  ))
+```
+
+## Time
+
+How are posts distributed across time?
+
+```{r, message=FALSE}
+reddit_posts %>% 
+  ggplot(aes(x=datetime, y = ..density..))+
+  geom_histogram(bins = 60, fill = 'grey50')+
+  geom_density(color="black")+
+  theme_minimal()+
+  labs(title = 'Distribution of posts across time',
+       y = "Density",
+       x = "Date")
+```
+
+Posts in the dataset extend back to January 2021. There is a binomial distribution with peaks in Fall 2021 and Winter 2022.
+
+## Subreddit distribution
+
+What is the distribution of posts across subreddits?
+
+```{r, message=FALSE, fig.height=8}
+reddit_posts %>%
+  distinct(body, .keep_all = TRUE) %>%
+  count(subreddit) %>%
+  mutate(subreddit = fct_reorder(subreddit, n)) %>%
+  ggplot(aes(x = subreddit, y = n)) +
+  geom_point() +
+  coord_flip()+
+  labs(title = "Number of posts per subreddit", 
+       y = "Subreddit",
+       x = "Number of posts")
+```
+
+Most posts come from a handful of subreddits in the dataset. Top 10 subreddits are displayed as a table and a bar chart below.
+
+```{r, message=FALSE}
+reddit_posts %>%
+  distinct(body, .keep_all = TRUE) %>%
+  count(subreddit) %>%
+  mutate(perc_total = n/sum(n)*100) %>%
+  arrange(desc(n)) %>%
+  top_n(10) %>%
+  paged_table()
+  
+reddit_posts %>%
+  distinct(body, .keep_all = TRUE) %>%
+  count(subreddit) %>%
+  arrange(desc(n)) %>%
+  top_n(10) %>%
+  mutate(subreddit = fct_reorder(subreddit, -n)) %>%
+  ggplot(aes(x = subreddit, y = n)) +
+  geom_col(show.legend = FALSE)+
+  theme(axis.text.x = element_text(angle = 90))+
+  labs(title = "Number of posts in top 10 subreddits",
+       x = "Subreddit",
+       y = "Number of posts")
+```
+
+How are the posts distributed by subreddit type?
+
+```{r, message=FALSE}
+reddit_posts %>% 
+  ggplot(aes(x= fct_infreq(subreddit_type)))+
+  geom_bar()+
+  labs(title = "Number of posts by subreddit type",
+       x = "Subreddit type",
+       y = "Number of posts")
+```
+
+Subreddits associated with geopolitical regions like cities, provinces, or all of Canada feature the most relevant content.
+
+How are posts distributed by region?
+
+```{r, message=FALSE}
+reddit_posts %>% 
+  ggplot(aes(x= fct_infreq(subreddit_region)))+
+  geom_bar()+
+  labs(title = "Number of posts by subreddit region",
+       x = "Region",
+       y = "Number of posts")
+```
+
+General Canadian subreddits (r/Canada and r/onguardforthee) have the most posts. Quebec is very underrepresented because only English search terms were used. No matching comments were found in subreddits linked to the terriotires. Otherwise, the number of posts loosely tracks with the populations of each of the provinces. This does not mean that this data is representative of the population but is interesting to note.
+
+## Users
+
+How many unique users?
+
+```{r, message=FALSE}
+reddit_posts %>%
+  distinct(body, .keep_all = TRUE) %>%
+  distinct(author) %>%
+  count() %>% as.list()
+```
+
+There are 397 unique users in the dataset. There are 411 unique posts. This means that 14 users posted more than once.
+
+```{r, message=FALSE}
+reddit_posts %>%
+  select(body, author) %>%
+  distinct(body, .keep_all = TRUE) %>%
+  add_count(author) %>%
+  summarize(max = max(n)) %>% as.list()
+```
+
+No single user posted more than twice. For this analysis we have treated these posts as distinct.
+
+## Word counts
+
+```{r, message=FALSE}
+reddit_posts %>% 
+  summarise(total_count = sum(wc),
+            median_count = median(wc),
+            min_count = min(wc),
+            max_count = max(wc))
+```
+
+There is a total of 40, 669 words across all posts. The median word count was 66. The shortest post was 8 words and the longest post was 622 words.
+
+## Codes
+
+How many codes are associated with each comment?
+
+```{r}
+reddit_posts_recoded %>%
+  group_by(doc_id) %>%
+  summarize(number_of_codes = n()) %>%
+  ungroup() %>%
+  count(number_of_codes) %>%
+  mutate(total = sum(n),
+         percentage = round(n/total*100, 1)) %>%
+  select(-total) %>%
+  paged_table()
+```
+
+The majority of comments were annotated with one code (n = 384, 93.4%). 22 comments (5.4%) had two codes. Only 5 comments (1.2%) had more than 2 codes.
+
+# 3: Findings
+
+```{r, message=FALSE}
+reddit_posts_recoded %>%
+  count(theme) %>%
+  mutate(n = n/411) %>%
+  mutate(theme = fct_reorder(theme, n)) %>%
+  ggplot(aes(x = theme, y = n)) +
+  geom_col() +
+  scale_x_discrete(labels = scales::label_wrap(25)) +
+  scale_y_continuous(labels = scales::percent, breaks = seq(0, .5, .1)) +
+  coord_flip() +
+  expand_limits(y = c(0, .495)) +
+  labs(x = "", y = "",
+       title = "Themes by frequency (%)")
+```
+
+Just over half of comments (52.8%) were coded as protection of self, others, and/or belief in science. The next most common code was return to normalcy (14.6%). Together the three mandate codes (travel, work/school, recreation) account for 23.1% of comments (travel = 8%, work/school = 7.8%, recreation = 7.3%). The remaining 6 codes account for between 6.1% (just because) and 1.2% (other and civic duty) of comments.3
+
+```{r, message=FALSE}
+reddit_words <- reddit_posts_recoded %>%
+  unnest_tokens(word, body, token = "words", to_lower = TRUE) %>%
+  anti_join(stop_words) %>%
+  filter(!str_detect(word, "[0-9]+")) %>%
+  count(theme, word, sort = TRUE)
+
+total_words <- reddit_words %>% 
+  group_by(theme) %>% 
+  summarize(total = sum(n))
+
+reddit_words <- left_join(reddit_words, total_words)
+
+reddit_tfidf <- reddit_words %>%
+  bind_tf_idf(word, theme, n) %>%
+  select(theme, word, tf_idf)
+```
+
+## Protection of self, others, and/or belief in science
+
+This code captures the more orthodox reasons Reddit users cite for being vaccinated. This was originally split into three codes: self-protection, protection of others, and the validity of scientific evidence suggesting that vaccines are safe and effective. During our final round of deliberations, we chose to collapse these codes into one. We did this because: a) they were frequently overlapping; b) they all reference standard reasons cited in government and media discourse for why Canadians should be vaccinated, and; c) they are less relevant to our focus on identifying unorthodox reasons for getting vaccinated.
+
+-   "I am vaccinated and have never been personally scared of Covid. I do however realize that there are vulnerable populations that are likely to be impacted much more than myself, and there is danger in the aggregate to the medical system and our capacity to care for people."
+
+-   "I got vaccinated so we could lift restrictions. I trust the science and from what I understand I'm relatively safe. I sincerely hope people will stay home if sick and/or mask up if they do go out. If they don't well then hopefully my vaccine does it's job :)"
+
+-   "I got my booster because I read the literature and trust the doctors when they say it is good. I know there is no (appreciable in real life) risk in receiving the vaccine, and I know enough about biology and chemistry to know exactly what is in the vaccine and what it will do to my body. I am very happy to have increased protection to decrease the risk i spread Covid to an elderly family member, and reduce my risk of getting sick personally to as low as possible."
+
+Many comments that were coded in this category either parroted public health messaging or remained neutral towards official institutions. However, several users recognized that vaccines are effective but were wary of the Canadian government's approach to promoting vaccination.
+
+-   "I'm pretty sure I had covid before this was barely a blip on the news but still got vaccinated because I don't think there is anything bad and I can't afford to be sick for long - but this mandated vaccinate shit is insane."
+
+-   "Got vaccinated because I was at risk from my weight and because governments were being idiots and taking liberties away if you didn't take it... I was provax for my first two doses but the more they go on the more I'm starting to switch to the other side. It doesn't make sense anymore. It doesn't seem they're following the science but actually have an interest in pharma corps."
+
+```{r, message=FALSE, fig.cap= "Top 20 tf-idf words"}
+reddit_tfidf %>%
+  filter(theme == "protection of self, others, and/or belief in science") %>%
+  arrange(-tf_idf) %>%
+  top_n(20) %>%
+  mutate(theme = fct_reorder(theme, +tf_idf)) %>%
+  ggplot(aes(label = word, size = tf_idf)) +
+  geom_text_wordcloud() +
+  scale_size_area(max_size = 10)
+```
+
+## Return to normalcy
+
+This code captures a relatively common sentiment, which was a strong desire to return to life as it was in the 'before times'. User comments in this category often took a nihilistic or apathetic stance regarding the efficacy of vaccines and viewed the official vaccination campaign as an official commitment to ease restrictions.
+
+-   "I don't give a shit about the anti-vaxxers, if they get it and die thats on them. I got the shot so we can go back to normal, vaccine passports for businesses is far from normal."
+
+-   "I'm in the bucket of: only got vaccinated because I want life to get back to normal. Only got the vaccine passport because I want life to get back to normal."
+
+-   "I didn't get vaccinated to stop myself from getting it, I got vaccinated because the Ford government said I could live my life normally and not get severely sick."\
+
+```{r, message=FALSE, fig.cap= "Top 20 tf-idf words"}
+reddit_tfidf %>%
+  filter(theme == "return to normalcy") %>%
+  arrange(-tf_idf) %>%
+  top_n(20) %>%
+  mutate(theme = fct_reorder(theme, +tf_idf)) %>%
+  ggplot(aes(label = word, size = tf_idf)) +
+  geom_text_wordcloud() +
+  scale_size_area(max_size = 10)
+```
+
+## Mandates
+
+There were several codes that gestured to different types of restrictions placed on people who were unvaccinated as the motivation for getting the vaccine. While all codes in this study are non-exclusive, Redditors often cited several types of mandates as reasons for why they got vaccinated. Mandates were seemingly effective motivators for these people. We kept these codes separate as they reflect less orthodox reasons for being vaccinated.
+
+For example, the following was coded as `recreation`, `work & school`, and `travel`:
+
+-   "We have teenagers they got vaccinated because they play sports, me and my husband we got vaccinated because it was required to keep our jobs, travel and eat out and all the other staff."\
+
+### Travel
+
+The travel code applied to anybody who said that they were vaccinated because they wanted to travel.
+
+-   "Got the jab so I can see the Jays in Detroit end of August"
+
+-   "I've learned he recently got the shot because he wanted to travel to the US. So I guess the mandates did work on him... but it's sad."
+
+-   "I'm in my early 20s, I wasn't that worried (not that I think I'm invincible to it but the statistics are on my side). I got the vaccine so I could travel and reunite with loved ones."
+
+```{r, message=FALSE, fig.cap= "Top 20 tf-idf words"}
+reddit_tfidf %>%
+  filter(theme == "mandates (travel)") %>%
+  arrange(-tf_idf) %>%
+  top_n(20) %>%
+  mutate(theme = fct_reorder(theme, +tf_idf)) %>%
+  ggplot(aes(label = word, size = tf_idf)) +
+  geom_text_wordcloud() +
+  scale_size_area(max_size = 10)
+```
+
+### Work & school
+
+This code captures people who said they were vaccinated because their workplaces or schools have vaccine mandates in place.
+
+-   "I'm vaccinated. I got vaccinated because my job required it back in March. Because I care for the patients I interact with. Being vaccinated means once is usually enough, since it's much less likely I get covid in the first place."
+
+-   "I got vaxxed so I can go to school not out of fear of covid."
+
+-   "Yeah my sister's and mom and I got the vaccine so we can go to school and work but my dad refuses to get it. Mine and my mom's bday are soon and he won't be able to go out to dinner and he still refuses to get it."
+
+```{r, message=FALSE, fig.cap= "Top 20 tf-idf words"}
+reddit_tfidf %>%
+  filter(theme == "mandates (work/school)") %>%
+  arrange(-tf_idf) %>%
+  top_n(20) %>%
+  mutate(theme = fct_reorder(theme, +tf_idf)) %>%
+  ggplot(aes(label = word, size = tf_idf)) +
+  geom_text_wordcloud() +
+  scale_size_area(max_size = 10)
+```
+
+### Recreation
+
+The recreation code applied to users who said they were vaccinated so they could participate in recreational activities in their communities. This included participating in sports and going to gyms or restaurants.
+
+-   "They are neither for or against the vaccine really, but their kids love hockey and they got the vaccine so their kids could enjoy hockey this year."
+
+-   "She got vaccinated because of the restaurant and gym mandate, but also because many other businesses were imposing their own."
+
+Several users noted that they got vaccinated so they could 'party' and go to bars. The recreation code included reasons for getting vaccinated that might be considered taboo. While they may have been joking, one user "got vaccinated so \[they\] can go to some gloryholes again" 
+
+-   "I got vaccinated so I can party but yeah I'm compassionate lol"
+
+```{r, message=FALSE, fig.cap= "Top 20 tf-idf words"}
+reddit_tfidf %>%
+  filter(theme == "mandates (recreation)") %>%
+  arrange(-tf_idf) %>%
+  top_n(20) %>%
+  mutate(theme = fct_reorder(theme, +tf_idf)) %>%
+  ggplot(aes(label = word, size = tf_idf)) +
+  geom_text_wordcloud() +
+  scale_size_area(max_size = 10)
+```
+
+## Just because
+
+This code captures users who thought the reasons to get vaccinated were self-evident. These posts varied in their overall sentiment but are united by the lack of any specific evidence or appeals to higher authority. 
+
+-   "I don't have an opinion about the booster, and honestly know nothing about the  advantages/disadvantages of it. I got my booster, because I got the other two, what's one more."
+
+-   "I got the shot because fuck it, but i don't think it's irrational to be afraid of those effects."
+
+-   "I got the vaccine because I chose to."
+
+-   "I got vaccinated because because thats what we need to do\...adults put want aside in favour of the right thing."\
+
+```{r, message=FALSE, fig.cap= "Top 20 tf-idf words"}
+reddit_tfidf %>%
+  filter(theme == "just because") %>%
+  arrange(-tf_idf) %>%
+  top_n(20) %>%
+  mutate(theme = fct_reorder(theme, +tf_idf)) %>%
+  ggplot(aes(label = word, size = tf_idf)) +
+  geom_text_wordcloud() +
+  scale_size_area(max_size = 10)
+```
+
+## Friends & family
+
+The friends and family code includes comments that indicate that the ability to safely re-unite with friends and family as a primary motivator for getting vaccinated.
+
+-   "I got vaccinated so that my buddy can come over and watch a fucking hockey game without worrying that I'll kill his mother."
+
+-   "My conspiracy theorist antivaxxer ex husband finally gave in and got vaccinated because he was not allowed to see his kids and grandkids....lol!"\
+
+```{r, message=FALSE, fig.cap= "Top 20 tf-idf words"}
+reddit_tfidf %>%
+  filter(theme == "friends & family") %>%
+  arrange(-tf_idf) %>%
+  top_n(20) %>%
+  mutate(theme = fct_reorder(theme, +tf_idf)) %>%
+  ggplot(aes(label = word, size = tf_idf)) +
+  geom_text_wordcloud() +
+  scale_size_area(max_size = 10)
+```
+
+## Social Acquiescence
+
+The social acquiescence code applies to comments that cite social pressure and persuasion as vaccine motivators.
+
+-   "My wife just got vaccinated after seeing this comment, thank you."
+
+-   "My wife helped to encourage her grandmother to get the shot. Her grandmother was convinced that this whole vaccination program was a ploy by the government to kill old people."
+
+-   "​​FWIW, my parents are in that group and got vaccinated after a moderate amount of pressure. They are hiding it from their friends though, for fear of being shunned. So that's a thing."\
+
+```{r, message=FALSE, fig.cap= "Top 20 tf-idf words"}
+reddit_tfidf %>%
+  filter(theme == "mandates (work/school)") %>%
+  arrange(-tf_idf) %>%
+  top_n(20) %>%
+  mutate(theme = fct_reorder(theme, +tf_idf)) %>%
+  ggplot(aes(label = word, size = tf_idf)) +
+  geom_text_wordcloud() +
+  scale_size_area(max_size = 10)
+```
+
+## Expert advice
+
+This code applies to users who cited medical advice or the intervention of a healthcare professional as their reason for getting vaccinated.
+
+-   "I got the vaccine because my doctor recommended it."
+
+-   "My co-worker got vaccinated after his doctor called his ass out."
+
+```{r, message=FALSE, fig.cap= "Top 20 tf-idf words"}
+reddit_tfidf %>%
+  filter(theme == "expert advice") %>%
+  arrange(-tf_idf) %>%
+  top_n(20) %>%
+  mutate(theme = fct_reorder(theme, +tf_idf)) %>%
+  ggplot(aes(label = word, size = tf_idf)) +
+  geom_text_wordcloud() +
+  scale_size_area(max_size = 10)
+```
+
+## Civic duty
+
+The civic duty code emerged during the last round of coding to capture posts that linked getting vaccinated with good citizenship and social responsibility.
+
+-   "The vast majority of us got vaccinated because we understand that living in a society and working in a job often means balancing everyone's freedoms, rights, \*\*with\*\* their responsibilities."
+
+-   "I got my booster because as far as I understand, those doses that are in the local pharmacy will either be used or wasted. I absolutely support sending vaccines to countries in need, but I don't think it helps for me to refuse a vaccine that has already been sent to my community."\
+
+```{r, message=FALSE, fig.cap= "Top 20 tf-idf words"}
+reddit_tfidf %>%
+  filter(theme == "civic duty") %>%
+  arrange(-tf_idf) %>%
+  top_n(20) %>%
+  mutate(theme = fct_reorder(theme, +tf_idf)) %>%
+  ggplot(aes(label = word, size = tf_idf)) +
+  geom_text_wordcloud() +
+  scale_size_area(max_size = 9)
+```
+
+## Other
+
+A small number of posts were simply strange. While they provided reasons for getting vaccinated they did not fit in with any of the other codes. While some are clearly jokes, others are unclear.
+
+-   "For my case, and others who are in the same boat and opinion, my only reason for getting vaccinated is due to coercion, since it does not stop transmission."
+
+-   "I got the shot because we're at war with the virus ,and make no mistake, the evil doers, we didn't start this war, but we will finish it. Dang I should switch to politics field!"
+
+```{r, message=FALSE, fig.cap= "Top 20 tf-idf words"}
+reddit_tfidf %>%
+  filter(theme == "other") %>%
+  arrange(-tf_idf) %>%
+  top_n(20) %>%
+  mutate(theme = fct_reorder(theme, +tf_idf)) %>%
+  ggplot(aes(label = word, size = tf_idf)) +
+  geom_text_wordcloud() +
+  scale_size_area(max_size = 10)
+```
+
+# Limitations
+
+There are several notable limitations to this analysis:
+
+-   Although we scraped every relevant comment from a large list of Canadian subreddits, some subreddits were private and could not be scraped (e.g., r/novascotiacovid19). The list we used is not a complete list of every Canadian subreddit and there are doubtlessly others that could be included in a future analysis.
+
+-   To limit the analysis to Canadians, we collected and analyzed comments from a large list of Canadian subreddits. Many (if not most) Canadians active on Reddit are unlikely to limit their online commenting activity only to Canada-themed subreddits and are likely to be posting in other subreddits which are not distinctively Canadian.
+
+-   To find relevant comments, we constructed a large dictionary of strings representing ways that people could express why they got vaccinated/boosted, e.g., "got vaccinated because". These are not the only ways to express this information. This dictionary could be expanded in the future. Alternately, more sophisticated techniques for information retrieval such as machine learning could be used to identify relevant content. The data set that we have annotated could be a helpful first step toward future efforts to train a machine learning classifier for this task.
+
+# Future directions
+
+There are many promising future opportunities to expand this research. One possibility is expanding the data set by collecting comments from additional subreddits and/or other websites (e.g., Twitter, Quora, Facebook, YouTube comments, newspaper comment sections). A larger data set would be more amenable to Big Data techniques like topic modeling. The project could be expanded to include other national jurisdictions. This would enable future comparative research into national variation in terms of unorthodox reasons for getting vaccinated.
+
+There are also more sophisticated techniques that could be used for content retrieval. For this project, we located Canadian content by targeting Canada-specific subreddits. But it may be possible to predict nationality at a user-level by analyzing how often they mention Canada or post on Canadian subreddits. This approach would enable access to comments from a much broader set of subreddits.
+
+Additionally, we found relevant content using a predetermined list of search terms (e.g., 'got vaccinated because') and manually filtering out irrelevant content (false positives). This is not the most efficient or scalable technique. In future iterations of this research, a machine learning classifier model (e.g., support vector machine) could be built to identify relevant content with a high level of accuracy. This would require a large corpus of annotated data that could be split into train, test, and validation data sets.
